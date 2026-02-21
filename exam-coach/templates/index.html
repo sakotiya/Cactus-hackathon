@@ -630,7 +630,7 @@ async function processVoice(mode) {
   const fd   = new FormData();
   fd.append('audio', blob, 'rec.wav');
 
-  const errId = mode === 'study' ? 'studyError' : 'practiceError';
+  // errId already declared above
   try {
     const tRes = await fetch('/transcribe', { method: 'POST', body: fd });
     if (!tRes.ok) throw new Error('Transcription failed — server error');
