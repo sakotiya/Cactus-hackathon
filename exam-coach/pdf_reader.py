@@ -35,16 +35,20 @@ def get_relevant_context(full_text: str, question: str, max_chars: int = 1500) -
     Find the most relevant section of the PDF for a given question.
 
     Strategy:
-    1. Split PDF into paragraphs
-    2. Score each paragraph by keyword overlap with the question
-    3. Return top-scoring paragraphs up to max_chars
+    1. Skip front matter (first 10% of text — usually metadata/EPUB headers)
+    2. Split into paragraphs
+    3. Score by: keyword density + keyword count + paragraph quality
+    4. Return top-scoring paragraphs up to max_chars, keeping original order
     """
     if not full_text.strip():
         return ""
 
+    # Skip front matter (copyright pages, EPUB headers, etc.)
+    skip = max(500, len(full_text) // 20)
+    body = full_text[skip:]
+
     if not question.strip():
-        # No question — return the beginning of the document
-        return full_text[:max_chars].strip()
+        return body[:max_chars].strip()
 
     # Extract keywords from question (ignore stop words)
     stop_words = {
@@ -54,7 +58,8 @@ def get_relevant_context(full_text: str, question: str, max_chars: int = 1500) -
         "which","how","why","and","or","but","in","on","at","to",
         "for","of","with","by","from","about","this","that","these",
         "those","my","your","his","her","its","our","their","i","you",
-        "he","she","it","we","they","me","him","us","them"
+        "he","she","it","we","they","me","him","us","them","not","no",
+        "s","t","don","isn","can","just","also","very","more","than"
     }
     keywords = set(
         w.lower() for w in re.findall(r'\b\w+\b', question)
@@ -62,31 +67,41 @@ def get_relevant_context(full_text: str, question: str, max_chars: int = 1500) -
     )
 
     if not keywords:
-        return full_text[:max_chars].strip()
+        return body[:max_chars].strip()
 
-    # Split into paragraphs
-    paragraphs = [p.strip() for p in re.split(r'\n{2,}', full_text) if len(p.strip()) > 50]
-
+    # Split into paragraphs (keep at least 60 chars)
+    paragraphs = [p.strip() for p in re.split(r'\n{2,}', body) if len(p.strip()) > 60]
     if not paragraphs:
-        return full_text[:max_chars].strip()
+        return body[:max_chars].strip()
 
-    # Score each paragraph by keyword hits
-    def score(para: str) -> int:
-        para_lower = para.lower()
-        return sum(1 for kw in keywords if kw in para_lower)
+    # Score: keyword hits weighted by density (hits / words)
+    def score(para: str) -> float:
+        words = re.findall(r'\b\w+\b', para.lower())
+        if not words:
+            return 0.0
+        hits = sum(1 for w in words if w in keywords)
+        density = hits / len(words)
+        # Boost paragraphs that have multiple different keywords
+        unique_hits = sum(1 for kw in keywords if kw in para.lower())
+        return hits + density * 10 + unique_hits * 2
 
-    scored = sorted(paragraphs, key=score, reverse=True)
+    # Keep top 5 scoring paragraphs in their original order
+    indexed = sorted(enumerate(paragraphs), key=lambda x: score(x[1]), reverse=True)
+    top_indices = sorted(i for i, _ in indexed[:5] if score(paragraphs[i]) > 0)
 
-    # Collect top paragraphs up to max_chars
     collected = []
     total = 0
-    for para in scored:
+    for i in top_indices:
+        para = paragraphs[i]
         if total + len(para) > max_chars:
+            remaining = max_chars - total
+            if remaining > 150:
+                collected.append(para[:remaining] + "…")
             break
         collected.append(para)
         total += len(para)
 
-    return "\n\n".join(collected) if collected else full_text[:max_chars].strip()
+    return "\n\n".join(collected) if collected else body[:max_chars].strip()
 
 
 # ── Smoke test ──────────────────────────────────────────────────────────────────
