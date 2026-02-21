@@ -157,9 +157,45 @@ async def transcribe(audio: UploadFile = File(...)):
             pass
 
 
+class AskRequest(BaseModel):
+    question: str
+
+class QuizRequest(BaseModel):
+    topic: str = ""
+
 class FeedbackRequest(BaseModel):
     transcript: str
     question:   str = ""   # optional: the exam question the student answered
+
+
+@app.post("/ask")
+async def ask(req: AskRequest):
+    """
+    Study mode: ask a question, get an AI explanation using the uploaded PDF.
+    Returns: { "answer": "...", "key_points": [...] }
+    """
+    try:
+        pdf_context = ""
+        if _pdf_text:
+            pdf_context = get_relevant_context(_pdf_text, req.question, max_chars=800)
+        result = coach.explain(question=req.question, pdf_context=pdf_context)
+        return JSONResponse({"answer": result["answer"], "key_points": result["key_points"], "success": True})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/quiz")
+async def quiz(req: QuizRequest):
+    """
+    Practice mode: generate a practice question from the uploaded PDF.
+    Returns: { "question": "...", "hint": "..." }
+    """
+    try:
+        pdf_context = get_relevant_context(_pdf_text, req.topic, max_chars=600) if _pdf_text else ""
+        result = coach.generate_question(pdf_context=pdf_context, topic=req.topic)
+        return JSONResponse({"question": result["question"], "hint": result["hint"], "success": True})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/feedback")

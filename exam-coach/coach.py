@@ -216,6 +216,189 @@ class ExamCoach:
         return {"score": score, "bullets": bullets, "raw": str(text)}
 
 
+    # ── Study mode: explain a topic from PDF ──────────────────────────────────
+    def explain(self, question: str, pdf_context: str = "") -> dict:
+        """
+        Answer a study question using PDF context.
+        Returns { "answer": "...", "key_points": [...] }
+        """
+        if not question.strip():
+            return {"answer": "Please ask a question.", "key_points": []}
+
+        context_part = (
+            f"From the study material:\n{pdf_context[:800]}\n\n"
+            if pdf_context else ""
+        )
+        prompt = (
+            f"{context_part}"
+            f"Question: {question}\n\n"
+            f"Give a clear, concise explanation in 3-5 sentences. "
+            f"Then list 2-3 key points to remember."
+        )
+
+        EXPLAIN_TOOL = {
+            "name": "explain_topic",
+            "description": "Explain a topic clearly for a student",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "explanation": {
+                        "type": "string",
+                        "description": "Clear 3-5 sentence explanation of the topic",
+                    },
+                    "key_point_1": {
+                        "type": "string",
+                        "description": "First key point to remember (one sentence)",
+                    },
+                    "key_point_2": {
+                        "type": "string",
+                        "description": "Second key point to remember (one sentence)",
+                    },
+                    "key_point_3": {
+                        "type": "string",
+                        "description": "Third key point to remember (one sentence)",
+                    },
+                },
+                "required": ["explanation", "key_point_1", "key_point_2"],
+            },
+        }
+
+        EXPLAIN_SYSTEM = (
+            "You are a helpful study tutor. "
+            "Explain topics clearly and call explain_topic with your explanation and key points."
+        )
+
+        model = cactus_init(self.model_path)
+        try:
+            raw_str = cactus_complete(
+                model,
+                [
+                    {"role": "system", "content": EXPLAIN_SYSTEM},
+                    {"role": "user",   "content": prompt},
+                ],
+                tools=[{"type": "function", "function": EXPLAIN_TOOL}],
+                force_tools=True,
+                max_tokens=400,
+                stop_sequences=["<|im_end|>", "<end_of_turn>"],
+            )
+        finally:
+            cactus_destroy(model)
+
+        return self._parse_explain(raw_str, question)
+
+    def _parse_explain(self, raw_str: str, question: str) -> dict:
+        try:
+            raw = json.loads(raw_str)
+        except json.JSONDecodeError:
+            return self._fallback_explain(raw_str, question)
+
+        calls = raw.get("function_calls", [])
+        if calls:
+            args = calls[0].get("arguments", {})
+            explanation = args.get("explanation", "").strip()
+            key_points = [
+                args[k].strip()
+                for k in ("key_point_1", "key_point_2", "key_point_3")
+                if args.get(k) and args[k].strip()
+            ]
+            # Sanitize — discard if just echoing question
+            q_lower = question.lower().strip()
+            key_points = [
+                p for p in key_points
+                if q_lower not in p.lower() and len(p) > 15
+            ]
+            if explanation and len(explanation) > 20:
+                return {
+                    "answer":     explanation,
+                    "key_points": key_points or ["Review this topic in your study material."],
+                }
+
+        return self._fallback_explain(raw.get("response") or raw_str, question)
+
+    def _fallback_explain(self, text: str, question: str) -> dict:
+        text = str(text).strip()
+        # Try to extract any meaningful sentence
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
+        answer = " ".join(sentences[:3]) if sentences else (
+            "I couldn't find a clear explanation. Please check your study PDF."
+        )
+        return {
+            "answer":     answer,
+            "key_points": [
+                "Review this topic in your PDF for more detail.",
+                "Try asking a more specific question.",
+            ],
+        }
+
+    # ── Quiz mode: generate a practice question from PDF ──────────────────────
+    def generate_question(self, pdf_context: str, topic: str = "") -> dict:
+        """
+        Generate a practice exam question from the PDF content.
+        Returns { "question": "...", "hint": "..." }
+        """
+        context = pdf_context[:600] if pdf_context else ""
+        topic_hint = f" Focus on: {topic}." if topic else ""
+
+        prompt = (
+            f"Study material:\n{context}\n\n"
+            f"Generate one exam-style practice question a student can answer verbally.{topic_hint} "
+            f"Also give a one-sentence hint."
+        )
+
+        QUIZ_TOOL = {
+            "name": "make_question",
+            "description": "Generate a practice exam question",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "A clear exam-style question",
+                    },
+                    "hint": {
+                        "type": "string",
+                        "description": "A one-sentence hint to help the student",
+                    },
+                },
+                "required": ["question", "hint"],
+            },
+        }
+
+        model = cactus_init(self.model_path)
+        try:
+            raw_str = cactus_complete(
+                model,
+                [
+                    {"role": "system", "content": "You are an exam coach. Generate practice questions and call make_question."},
+                    {"role": "user",   "content": prompt},
+                ],
+                tools=[{"type": "function", "function": QUIZ_TOOL}],
+                force_tools=True,
+                max_tokens=200,
+                stop_sequences=["<|im_end|>", "<end_of_turn>"],
+            )
+        finally:
+            cactus_destroy(model)
+
+        try:
+            raw = json.loads(raw_str)
+            calls = raw.get("function_calls", [])
+            if calls:
+                args = calls[0].get("arguments", {})
+                q = args.get("question", "").strip()
+                h = args.get("hint", "").strip()
+                if q and len(q) > 10:
+                    return {"question": q, "hint": h}
+        except Exception:
+            pass
+
+        return {
+            "question": "Explain the main concept covered in your study material.",
+            "hint": "Use specific terms and examples from the text.",
+        }
+
+
 # ── Quick smoke-test ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     coach = ExamCoach()
