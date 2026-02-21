@@ -7,6 +7,7 @@ Endpoints:
   GET  /              → serves the mobile UI (index.html)
   POST /transcribe    → audio file → transcript (on-device Whisper)
   POST /feedback      → transcript text → score + bullets (on-device LLM)
+  POST /upload-pdf    → PDF file → extracts text, stores in session
   GET  /health        → quick status check
 
 Run with:
@@ -25,6 +26,7 @@ from pydantic import BaseModel
 
 from stt import SpeechToText
 from coach import ExamCoach
+from pdf_reader import extract_text, get_relevant_context
 
 # ── App setup ───────────────────────────────────────────────────────────────────
 app = FastAPI(title="ExamGuard — Privacy Coach")
@@ -49,6 +51,10 @@ coach = ExamCoach()
 print("  ✓ FunctionGemma (LLM) ready")
 print("\nExamGuard is running at http://localhost:8000\n")
 
+# In-memory PDF store (single session, no DB needed)
+_pdf_text: str = ""
+_pdf_name: str = ""
+
 # ── HTML template ────────────────────────────────────────────────────────────────
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "index.html"
 
@@ -66,12 +72,50 @@ async def index():
 @app.get("/health")
 async def health():
     return {
-        "status": "ok",
+        "status":      "ok",
         "stt_ready":   stt is not None,
         "llm_ready":   True,
         "on_device":   True,
         "cloud_calls": 0,
+        "pdf_loaded":  bool(_pdf_text),
+        "pdf_name":    _pdf_name or None,
     }
+
+
+@app.post("/upload-pdf")
+async def upload_pdf(pdf: UploadFile = File(...)):
+    """
+    Upload a study PDF. Text is extracted on-device (no cloud).
+    Extracted text is stored in memory for the session.
+
+    Returns: { "success": true, "pages": N, "chars": N, "filename": "..." }
+    """
+    global _pdf_text, _pdf_name
+
+    if not pdf.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        data = await pdf.read()
+        tmp.write(data)
+        tmp_path = tmp.name
+
+    try:
+        text = extract_text(tmp_path)
+        _pdf_text = text
+        _pdf_name = pdf.filename
+        return JSONResponse({
+            "success":  True,
+            "filename": pdf.filename,
+            "chars":    len(text),
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 @app.post("/transcribe")
@@ -115,21 +159,34 @@ async def transcribe(audio: UploadFile = File(...)):
 
 class FeedbackRequest(BaseModel):
     transcript: str
+    question:   str = ""   # optional: the exam question the student answered
 
 
 @app.post("/feedback")
 async def feedback(req: FeedbackRequest):
     """
-    Receive a transcript and return on-device AI feedback.
+    Receive a transcript (and optionally a question) and return on-device AI feedback.
+    If a PDF is loaded, finds the most relevant context and includes it in the prompt.
 
     Returns: { "score": "7/10", "bullets": ["...", "...", "..."] }
     """
     try:
-        result = coach.get_feedback(req.transcript)
+        # Pull relevant PDF excerpt (if a PDF has been uploaded)
+        pdf_context = ""
+        if _pdf_text:
+            search_query = req.question or req.transcript
+            pdf_context = get_relevant_context(_pdf_text, search_query, max_chars=1500)
+
+        result = coach.get_feedback(
+            transcript=req.transcript,
+            question=req.question,
+            pdf_context=pdf_context,
+        )
         return JSONResponse({
-            "score":   result["score"],
-            "bullets": result["bullets"],
-            "success": True,
+            "score":       result["score"],
+            "bullets":     result["bullets"],
+            "used_pdf":    bool(pdf_context),
+            "success":     True,
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

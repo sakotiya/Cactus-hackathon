@@ -175,6 +175,77 @@
     }
     .error.show { display: block; }
 
+    /* ── Study section ────────────────────────────── */
+    .study-section {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 1rem; padding: 1rem 1.25rem; margin-bottom: 1.25rem;
+    }
+    .study-title {
+      font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--muted); margin-bottom: 0.85rem;
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+
+    /* PDF upload row */
+    .pdf-row { display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.85rem; }
+    .pdf-upload-btn {
+      flex-shrink: 0;
+      padding: 0.45rem 0.9rem; border-radius: 0.6rem;
+      border: 1px dashed var(--border); background: transparent;
+      color: var(--muted); font-size: 0.8rem; font-weight: 600;
+      cursor: pointer; transition: border-color 0.2s, color 0.2s;
+      white-space: nowrap;
+    }
+    .pdf-upload-btn:hover { border-color: var(--green); color: var(--green); }
+    #pdfInput { display: none; }
+    .pdf-status {
+      font-size: 0.78rem; color: var(--muted); flex: 1;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .pdf-status.loaded { color: var(--green); }
+    .pdf-clear {
+      flex-shrink: 0; background: transparent; border: none;
+      color: #484f58; font-size: 0.8rem; cursor: pointer; padding: 0.2rem;
+      display: none;
+    }
+    .pdf-clear.show { display: block; }
+
+    /* Question input */
+    .question-label {
+      font-size: 0.75rem; color: var(--muted); margin-bottom: 0.35rem;
+      display: block;
+    }
+    .question-input {
+      width: 100%; background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); border-radius: 0.65rem; padding: 0.6rem 0.85rem;
+      font-size: 0.9rem; line-height: 1.45; resize: none; outline: none;
+      transition: border-color 0.2s;
+      font-family: inherit;
+    }
+    .question-input::placeholder { color: #484f58; }
+    .question-input:focus { border-color: var(--green); }
+
+    /* Active question banner while recording */
+    .question-banner {
+      display: none; background: #0c2d1d; border: 1px solid var(--green-dk);
+      border-radius: 0.75rem; padding: 0.7rem 1rem;
+      margin-bottom: 1rem; font-size: 0.85rem; color: #a7f3d0; line-height: 1.5;
+    }
+    .question-banner.show { display: block; }
+    .question-banner-label {
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--green); margin-bottom: 0.3rem;
+    }
+
+    /* PDF context badge on feedback */
+    .pdf-used-badge {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      background: #0c2d1d; border: 1px solid var(--green-dk);
+      color: var(--green); padding: 0.25rem 0.65rem; border-radius: 99px;
+      font-size: 0.65rem; font-weight: 700; letter-spacing: 0.5px;
+      margin-bottom: 0.85rem; text-transform: uppercase;
+    }
+
     /* ── Footer ───────────────────────────────────── */
     .footer {
       text-align: center; padding: 1rem 1.5rem 1.75rem;
@@ -195,10 +266,40 @@
 <!-- ── Main ───────────────────────────────────────────────────────── -->
 <div class="content">
 
+  <!-- Study Material Panel -->
+  <div class="study-section">
+    <div class="study-title">📚 Study Material (optional)</div>
+
+    <!-- PDF upload -->
+    <div class="pdf-row">
+      <button class="pdf-upload-btn" onclick="document.getElementById('pdfInput').click()">
+        📄 Upload PDF
+      </button>
+      <input type="file" id="pdfInput" accept=".pdf" onchange="handlePdfUpload(this)">
+      <span class="pdf-status" id="pdfStatus">No PDF loaded</span>
+      <button class="pdf-clear" id="pdfClear" onclick="clearPdf()" title="Remove PDF">✕</button>
+    </div>
+
+    <!-- Question input -->
+    <label class="question-label" for="questionInput">Exam question (type or paste):</label>
+    <textarea
+      id="questionInput"
+      class="question-input"
+      rows="2"
+      placeholder="e.g. Explain the process of photosynthesis…"
+    ></textarea>
+  </div>
+
   <p class="instruction">
     Tap <strong>Record</strong>, speak your practice answer,<br>
     tap again to stop — get instant on-device feedback.
   </p>
+
+  <!-- Active question banner (shown while recording / processing) -->
+  <div class="question-banner" id="questionBanner">
+    <div class="question-banner-label">📋 Your Question</div>
+    <div id="questionBannerText"></div>
+  </div>
 
   <!-- Record button -->
   <div class="record-wrap">
@@ -227,11 +328,12 @@
 
   <!-- Feedback card -->
   <div class="card" id="feedbackCard">
+    <div id="pdfUsedBadge" style="display:none" class="pdf-used-badge">📄 Scored against your PDF</div>
     <div class="score-row">
       <div class="score-circle" id="scoreCircle">?</div>
       <div>
         <div class="score-title" id="scoreTitle">Score</div>
-        <div class="score-sub">Clarity · Structure · Completeness</div>
+        <div class="score-sub" id="scoreSub">Clarity · Structure · Completeness</div>
       </div>
     </div>
     <div class="bullets-label">💡 Suggestions</div>
@@ -262,6 +364,46 @@
   let elapsed       = 0;
   const MAX_SECS    = 60;
 
+  // ── PDF Upload ─────────────────────────────────────────────────────
+  async function handlePdfUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const statusEl = document.getElementById("pdfStatus");
+    const clearBtn = document.getElementById("pdfClear");
+    statusEl.textContent = "Uploading…";
+    statusEl.classList.remove("loaded");
+
+    const formData = new FormData();
+    formData.append("pdf", file);
+
+    try {
+      const res = await fetch("/upload-pdf", { method: "POST", body: formData });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({ detail: "Upload failed" }));
+        throw new Error(e.detail || "Upload failed");
+      }
+      const data = await res.json();
+      statusEl.textContent = `✓ ${data.filename} (${Math.round(data.chars / 1000)}k chars)`;
+      statusEl.classList.add("loaded");
+      clearBtn.classList.add("show");
+    } catch (err) {
+      statusEl.textContent = `✗ ${err.message}`;
+      statusEl.classList.remove("loaded");
+    }
+
+    // Reset input so same file can be re-uploaded
+    input.value = "";
+  }
+
+  function clearPdf() {
+    document.getElementById("pdfStatus").textContent = "No PDF loaded";
+    document.getElementById("pdfStatus").classList.remove("loaded");
+    document.getElementById("pdfClear").classList.remove("show");
+    // Server-side clear happens automatically on next session restart;
+    // for now just clear the UI indicator.
+  }
+
   // ── Toggle recording ───────────────────────────────────────────────
   function toggleRecording() {
     isRecording ? stopRecording() : startRecording();
@@ -291,6 +433,14 @@
       isRecording = true;
       setBtn("recording", "Stop");
       hideError(); hideResults();
+
+      // Show active question banner if a question was typed
+      const q = document.getElementById("questionInput").value.trim();
+      if (q) {
+        document.getElementById("questionBannerText").textContent = q;
+        document.getElementById("questionBanner").classList.add("show");
+      }
+
       startTimer();
 
     } catch (err) {
@@ -355,6 +505,8 @@
 
     showLoading("Transcribing speech…", "Running Whisper on-device");
 
+    const question = document.getElementById("questionInput").value.trim();
+
     try {
       // Step 1 — Transcribe
       const formData = new FormData();
@@ -368,20 +520,26 @@
       const { transcript } = await tRes.json();
       showTranscript(transcript);
 
-      // Step 2 — Feedback
-      setLoadingStep("Getting AI feedback…", "Running LLM on-device");
+      // Step 2 — Feedback (with optional question + PDF context)
+      const hasPdf = document.getElementById("pdfStatus").classList.contains("loaded");
+      const stepMsg = hasPdf
+        ? "Scoring against your PDF…"
+        : question
+          ? "Scoring against your question…"
+          : "Getting AI feedback…";
+      setLoadingStep(stepMsg, "Running LLM on-device");
 
       const fRes = await fetch("/feedback", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ transcript }),
+        body:    JSON.stringify({ transcript, question }),
       });
       if (!fRes.ok) {
         const e = await fRes.json().catch(() => ({ detail: "Feedback error" }));
         throw new Error(e.detail || "Feedback failed");
       }
       const feedback = await fRes.json();
-      showFeedback(feedback);
+      showFeedback(feedback, question);
 
       hideLoading();
       setBtn("idle", "Record");
@@ -430,10 +588,22 @@
     document.getElementById("transcriptCard").classList.add("show");
   }
 
-  function showFeedback(data) {
+  function showFeedback(data, question) {
     const score = data.score || "?";
     document.getElementById("scoreCircle").textContent = score.split("/")[0];
     document.getElementById("scoreTitle").textContent  = `Score: ${score}`;
+
+    // Update subtitle based on context used
+    const sub = data.used_pdf
+      ? "Scored against your study PDF"
+      : question
+        ? "Scored against your question"
+        : "Clarity · Structure · Completeness";
+    document.getElementById("scoreSub").textContent = sub;
+
+    // Show PDF badge if PDF was used
+    const badge = document.getElementById("pdfUsedBadge");
+    badge.style.display = data.used_pdf ? "inline-flex" : "none";
 
     const bullets = data.bullets || [];
     document.getElementById("bulletsList").innerHTML = bullets.map(b =>
@@ -447,6 +617,8 @@
     ["transcriptCard","feedbackCard"].forEach(id =>
       document.getElementById(id).classList.remove("show"));
     document.getElementById("tryAgainBtn").classList.remove("show");
+    document.getElementById("questionBanner").classList.remove("show");
+    document.getElementById("pdfUsedBadge").style.display = "none";
   }
 
   function showError(msg) {

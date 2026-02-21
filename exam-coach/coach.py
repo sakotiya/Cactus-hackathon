@@ -58,6 +58,13 @@ SYSTEM_PROMPT = (
     "and 2-3 short improvement suggestions."
 )
 
+SYSTEM_PROMPT_WITH_CONTEXT = (
+    "You are an exam coach with access to the student's study material. "
+    "Evaluate the student's spoken answer against the exam question and study content. "
+    "Call give_feedback with a score (1-10) and 2-3 specific improvement suggestions "
+    "based on what is covered in the study material."
+)
+
 
 class ExamCoach:
     """On-device exam answer evaluator via Cactus FunctionGemma."""
@@ -65,12 +72,16 @@ class ExamCoach:
     def __init__(self, model_path: str = LLM_PATH):
         self.model_path = model_path
 
-    def get_feedback(self, transcript: str) -> dict:
+    def get_feedback(self, transcript: str,
+                     question: str = "",
+                     pdf_context: str = "") -> dict:
         """
         Evaluate a student's spoken answer and return structured feedback.
 
         Args:
-            transcript: The student's spoken answer as text
+            transcript:  The student's spoken answer as text
+            question:    The exam question they were answering (optional)
+            pdf_context: Relevant excerpt from their study PDF (optional)
 
         Returns:
             {
@@ -86,18 +97,28 @@ class ExamCoach:
                 "raw": "",
             }
 
-        prompt = (
-            f"Student's answer:\n\"{transcript}\"\n\n"
-            f"Score this answer from 1-10 on clarity, structure, and completeness. "
-            f"Give 2-3 short improvement suggestions."
+        # Build prompt — richer when question/PDF context is available
+        parts = []
+        if pdf_context:
+            parts.append(f"Study material excerpt:\n{pdf_context}")
+        if question:
+            parts.append(f"Exam question:\n{question}")
+        parts.append(f"Student's spoken answer:\n\"{transcript}\"")
+        parts.append(
+            "Score this answer 1-10 on clarity, structure, and completeness"
+            + (" relative to the study material and question above" if pdf_context or question else "")
+            + ". Give 2-3 specific improvement suggestions."
         )
+        prompt = "\n\n".join(parts)
+
+        system = SYSTEM_PROMPT_WITH_CONTEXT if (pdf_context or question) else SYSTEM_PROMPT
 
         model = cactus_init(self.model_path)
         try:
             raw_str = cactus_complete(
                 model,
                 [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system},
                     {"role": "user",   "content": prompt},
                 ],
                 tools=[{"type": "function", "function": FEEDBACK_TOOL}],
