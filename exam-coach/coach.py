@@ -220,118 +220,93 @@ class ExamCoach:
     def explain(self, question: str, pdf_context: str = "") -> dict:
         """
         Answer a study question using PDF context.
-        Returns { "answer": "...", "key_points": [...] }
+
+        Strategy: FunctionGemma (270M) is a function-calling model, not a
+        text-generation model — asking it to write explanations causes refusals.
+        Instead we:
+          1. Return the most relevant PDF excerpt directly as the explanation
+             (accurate, no hallucination, always works).
+          2. Use FunctionGemma only to extract 2-3 key points from that text
+             (a simple copy/extraction task it handles well).
         """
         if not question.strip():
             return {"answer": "Please ask a question.", "key_points": []}
 
-        context_part = (
-            f"From the study material:\n{pdf_context[:800]}\n\n"
-            if pdf_context else ""
-        )
-        prompt = (
-            f"{context_part}"
-            f"Question: {question}\n\n"
-            f"Give a clear, concise explanation in 3-5 sentences. "
-            f"Then list 2-3 key points to remember."
-        )
+        if not pdf_context:
+            return {
+                "answer": (
+                    "No PDF loaded yet. Upload your study PDF using the button at the top, "
+                    "then ask your question — the explanation will come directly from your material."
+                ),
+                "key_points": ["Upload a PDF to get started."],
+            }
 
-        EXPLAIN_TOOL = {
-            "name": "explain_topic",
-            "description": "Explain a topic clearly for a student",
+        # ── Step 1: use PDF text directly as the explanation ──────────────────
+        # Clean up whitespace and take the most relevant passage (already ranked
+        # by pdf_reader.get_relevant_context before this is called).
+        clean = re.sub(r'\s+', ' ', pdf_context).strip()
+        explanation = clean[:900]   # show up to 900 chars from the PDF
+
+        # ── Step 2: ask FunctionGemma to extract key points from that text ───
+        # This is a copy/extraction task — much easier than free-form generation.
+        KEY_TOOL = {
+            "name": "extract_points",
+            "description": "Extract the most important facts from the given text",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "explanation": {
-                        "type": "string",
-                        "description": "Clear 3-5 sentence explanation of the topic",
-                    },
-                    "key_point_1": {
-                        "type": "string",
-                        "description": "First key point to remember (one sentence)",
-                    },
-                    "key_point_2": {
-                        "type": "string",
-                        "description": "Second key point to remember (one sentence)",
-                    },
-                    "key_point_3": {
-                        "type": "string",
-                        "description": "Third key point to remember (one sentence)",
-                    },
+                    "point_1": {"type": "string", "description": "First important fact (one sentence)"},
+                    "point_2": {"type": "string", "description": "Second important fact (one sentence)"},
+                    "point_3": {"type": "string", "description": "Third important fact (one sentence, optional)"},
                 },
-                "required": ["explanation", "key_point_1", "key_point_2"],
+                "required": ["point_1", "point_2"],
             },
         }
 
-        EXPLAIN_SYSTEM = (
-            "You are a helpful study tutor. "
-            "Explain topics clearly and call explain_topic with your explanation and key points."
+        prompt = (
+            f"Text:\n{clean[:500]}\n\n"
+            f"Extract the 2-3 most important facts from this text. "
+            f"Call extract_points with short sentences."
         )
 
+        key_points = []
         model = cactus_init(self.model_path)
         try:
             raw_str = cactus_complete(
                 model,
                 [
-                    {"role": "system", "content": EXPLAIN_SYSTEM},
+                    {"role": "system", "content": "You extract key facts from text. Call extract_points."},
                     {"role": "user",   "content": prompt},
                 ],
-                tools=[{"type": "function", "function": EXPLAIN_TOOL}],
+                tools=[{"type": "function", "function": KEY_TOOL}],
                 force_tools=True,
-                max_tokens=400,
+                max_tokens=250,
                 stop_sequences=["<|im_end|>", "<end_of_turn>"],
             )
+            raw = json.loads(raw_str)
+            calls = raw.get("function_calls", [])
+            if calls:
+                args = calls[0].get("arguments", {})
+                for k in ("point_1", "point_2", "point_3"):
+                    v = (args.get(k) or "").strip()
+                    if v and len(v) > 15:
+                        key_points.append(v)
+        except Exception:
+            pass
         finally:
             cactus_destroy(model)
 
-        return self._parse_explain(raw_str, question)
+        # Fallback key points: split PDF into sentences and pick first 3
+        if not key_points:
+            sentences = re.split(r'(?<=[.!?])\s+', clean)
+            key_points = [s.strip() for s in sentences if len(s.strip()) > 30][:3]
 
-    def _parse_explain(self, raw_str: str, question: str) -> dict:
-        try:
-            raw = json.loads(raw_str)
-        except json.JSONDecodeError:
-            return self._fallback_explain(raw_str, question)
+        if not key_points:
+            key_points = ["Review this section in your PDF for more detail."]
 
-        calls = raw.get("function_calls", [])
-        if calls:
-            args = calls[0].get("arguments", {})
-            explanation = args.get("explanation", "").strip()
-            key_points = [
-                args[k].strip()
-                for k in ("key_point_1", "key_point_2", "key_point_3")
-                if args.get(k) and args[k].strip()
-            ]
-            # Sanitize — discard if just echoing question
-            q_lower = question.lower().strip()
-            key_points = [
-                p for p in key_points
-                if q_lower not in p.lower() and len(p) > 15
-            ]
-            if explanation and len(explanation) > 20:
-                return {
-                    "answer":     explanation,
-                    "key_points": key_points or ["Review this topic in your study material."],
-                }
+        return {"answer": explanation, "key_points": key_points}
 
-        return self._fallback_explain(raw.get("response") or raw_str, question)
-
-    def _fallback_explain(self, text: str, question: str) -> dict:
-        text = str(text).strip()
-        # Try to extract any meaningful sentence
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
-        answer = " ".join(sentences[:3]) if sentences else (
-            "I couldn't find a clear explanation. Please check your study PDF."
-        )
-        return {
-            "answer":     answer,
-            "key_points": [
-                "Review this topic in your PDF for more detail.",
-                "Try asking a more specific question.",
-            ],
-        }
-
-    # ── Quiz mode: generate a practice question from PDF ──────────────────────
+    # ── Quiz mode: generate a practice question from PDF ─────────────────────
     def generate_question(self, pdf_context: str, topic: str = "") -> dict:
         """
         Generate a practice exam question from the PDF content.
@@ -388,10 +363,21 @@ class ExamCoach:
                 args = calls[0].get("arguments", {})
                 q = args.get("question", "").strip()
                 h = args.get("hint", "").strip()
-                if q and len(q) > 10:
-                    return {"question": q, "hint": h}
+                if q and len(q) > 10 and "?" in q:
+                    return {"question": q, "hint": h or "Think about what you read in the PDF."}
         except Exception:
             pass
+
+        # Fallback: build a question from a key sentence in the PDF
+        if pdf_context:
+            sentences = re.split(r'(?<=[.!?])\s+', re.sub(r'\s+', ' ', pdf_context))
+            long_sentences = [s.strip() for s in sentences if len(s.strip()) > 40]
+            if long_sentences:
+                pick = long_sentences[0]
+                return {
+                    "question": f"Explain the following concept in your own words: \"{pick[:120]}…\"",
+                    "hint": "Use specific terms and examples from the text.",
+                }
 
         return {
             "question": "Explain the main concept covered in your study material.",
