@@ -396,9 +396,15 @@ async function handlePdfUpload(input) {
   fd.append('pdf', file);
   try {
     const res = await fetch('/upload-pdf', { method: 'POST', body: fd });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Upload failed');
-    const d = await res.json();
-    st.textContent = `✓ ${d.filename} (${Math.round(d.chars/1000)}k chars)`;
+    const bodyText = await res.text();
+    let d;
+    try { d = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { d = {}; }
+    if (!res.ok) {
+      const detail = d.detail;
+      const msg = Array.isArray(detail) ? (detail[0] && detail[0].msg) || 'Upload failed' : (detail || 'Upload failed');
+      throw new Error(typeof msg === 'string' ? msg : 'Upload failed');
+    }
+    st.textContent = `✓ ${d.filename || file.name} (${Math.round((d.chars || 0) / 1000)}k chars)`;
     st.classList.add('loaded');
     document.getElementById('pdfClear').classList.add('show');
     pdfLoaded = true;
@@ -439,6 +445,7 @@ async function askQuestion(questionOverride) {
          ${(d.key_points).map(p => `<div class="keypoint"><div class="kp-dot"></div><span>${esc(p)}</span></div>`).join('')}`
       : '';
 
+    const answerText = (d && d.answer != null && String(d.answer).trim()) ? d.answer : 'No answer could be generated. Try asking something specific about your PDF.';
     const card = document.createElement('div');
     card.className = 'chat-item';
     card.innerHTML = `
@@ -446,7 +453,7 @@ async function askQuestion(questionOverride) {
       <div class="chat-q-text">${esc(q)}</div>
       <div class="chat-divider"></div>
       <div class="card-label">📖 From your PDF</div>
-      <div class="explanation-text">${esc(d.answer)}</div>
+      <div class="explanation-text">${esc(answerText)}</div>
       ${keyPointsHtml}
     `;
     history.insertBefore(card, history.firstChild);

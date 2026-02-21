@@ -18,14 +18,16 @@ Endpoints:
 """
 
 import os
+import re
 import sys
 import tempfile
 import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 
 from stt import SpeechToText
@@ -55,6 +57,14 @@ TEMPLATE_PATH = Path(__file__).parent / "templates" / "index.html"
 print("\nExamGuard is running at http://localhost:8000\n")
 
 
+# ── Exception handler for upload validation (e.g. missing form field "pdf") ─────
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    if request.url.path == "/upload-pdf" and exc.errors():
+        msg = "Please select a PDF file and try again. (Form field must be 'pdf'.)"
+        return JSONResponse(status_code=422, content={"detail": msg})
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -76,15 +86,19 @@ async def health():
 
 
 @app.post("/upload-pdf")
-async def upload_pdf(pdf: UploadFile = File(...)):
+async def upload_pdf(pdf: UploadFile = File(..., description="PDF file (form field name must be 'pdf')")):
     """Extract PDF text and store in memory for keyword-based retrieval."""
     global _pdf_text, _pdf_name
 
-    if not pdf.filename.lower().endswith(".pdf"):
+    if not pdf.filename or not str(pdf.filename).lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
+    content = await pdf.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="File is empty. Please choose a valid PDF.")
+
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(await pdf.read())
+        tmp.write(content)
         tmp_pdf = tmp.name
 
     try:
@@ -125,16 +139,38 @@ async def ask(req: AskRequest):
             "key_points": [],
         })
 
+    # Detect greetings / off-topic so we always return a clear response
+    _q = req.question.strip().lower()
+    _words = set(re.findall(r'\b\w+\b', _q))
+    _stop = {"a","an","the","is","are","was","were","be","been","being", "have","has","had","do","does","did","will","would","could", "should","may","might","shall","what","when","where","who","which","how","why","and","or","but","in","on","at","to","for","of","with","by","from","about","this","that","these","those","my","your","his","her","its","our","their","i","you","he","she","it","we","they","me","him","us","them","not","no","s","t","don","isn","can","just","also","very","more","than","hey","hi","hello","sup","yes","no"}
+    _meaningful = _words - _stop
+    _meaningful = {w for w in _meaningful if len(w) > 2}
+    _greetings = {"hey", "hi", "hello", "sup", "whats", "what"}
+    if not _meaningful or _meaningful <= _greetings:
+        return JSONResponse({
+            "success":    True,
+            "answer":     "Ask me something about your PDF. For example: \"What is Big Data?\", \"Explain the first chapter\", or \"What are the key points?\"",
+            "key_points": [],
+        })
+
     # Get top relevant passage (main answer)
     answer = get_relevant_context(_pdf_text, req.question, max_chars=800)
 
-    # Get key points: search again with slightly different scope for variety
-    import re
     sentences = re.split(r'(?<=[.!?])\s+', answer)
-    key_points = [s.strip() for s in sentences if len(s.strip()) > 40]
+    sentences = [s.strip() for s in sentences if s.strip()]
+    key_points = [s for s in sentences if len(s) > 40]
 
-    # Main explanation = first 600 chars; rest become key points
-    main = answer[:600].strip()
+    # Main explanation: full sentences up to ~600 chars (no mid-sentence cut)
+    max_main_chars = 600
+    main_parts = []
+    total = 0
+    for s in sentences:
+        if total + len(s) + (1 if main_parts else 0) <= max_main_chars:
+            main_parts.append(s)
+            total += len(s) + (1 if main_parts else 0)
+        else:
+            break
+    main = " ".join(main_parts) if main_parts else answer[:max_main_chars].strip()
     bullets = key_points[2:5] if len(key_points) > 2 else []
 
     return JSONResponse({
@@ -151,8 +187,6 @@ class QuizRequest(BaseModel):
 @app.post("/quiz")
 async def quiz(req: QuizRequest):
     """Practice mode: pick a sentence from the PDF as a practice question."""
-    import re
-
     if _pdf_text:
         query = req.topic.strip() or "definition concept example"
         passage = get_relevant_context(_pdf_text, query, max_chars=600)
