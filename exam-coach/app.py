@@ -29,6 +29,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from stt import SpeechToText
@@ -45,6 +46,7 @@ LLM_PATH = str(CACTUS_REPO / "weights" / "functiongemma-270m-it")
 # ── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(title="ExamGuard")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 # ── Models ───────────────────────────────────────────────────────────────────
 print("Loading on-device models…")
@@ -338,12 +340,17 @@ async def transcribe(audio: UploadFile = File(...)):
         if not transcript:
             return JSONResponse({
                 "transcript": "",
-                "success": False,
-                "detail": "No speech detected. Please speak clearly and try again."
+                "success":    False,
+                "detail":     "No speech detected. Please speak clearly and try again.",
             }, status_code=200)
         return JSONResponse({"transcript": transcript, "success": True})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"  [STT] transcribe endpoint error: {e}")
+        return JSONResponse({
+            "transcript": "",
+            "success":    False,
+            "detail":     "Speech recognition failed. Please try again or type your question.",
+        }, status_code=200)
     finally:
         try:
             os.unlink(tmp_path)

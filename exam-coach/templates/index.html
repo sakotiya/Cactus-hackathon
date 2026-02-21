@@ -575,32 +575,40 @@ async function toggleVoice(mode) {
 async function startVoice(mode) {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-    // Read the ACTUAL sample rate the browser decided to use (may differ from requested)
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     sampleRate = audioCtx.sampleRate;
-    const src  = audioCtx.createMediaStreamSource(stream);
-    scriptProc = audioCtx.createScriptProcessor(4096, 1, 1);
     allSamples = [];
 
-    scriptProc.onaudioprocess = e =>
-      allSamples.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    // Load AudioWorklet processor (replaces deprecated ScriptProcessorNode)
+    await audioCtx.audioWorklet.addModule('/static/recorder-worklet.js');
+    scriptProc = new AudioWorkletNode(audioCtx, 'recorder-processor');
+    scriptProc._stream = stream;
+
+    scriptProc.port.onmessage = (e) => {
+      allSamples.push(e.data);
+    };
+
+    const src = audioCtx.createMediaStreamSource(stream);
     src.connect(scriptProc);
     scriptProc.connect(audioCtx.destination);
-    scriptProc._stream = stream;
 
     activeVoice = mode;
     setMicState(mode, 'recording');
     startTimer(mode);
   } catch(e) {
-    showErr(mode === 'study' ? 'studyError' : 'practiceError',
-      'Microphone access denied. Please allow microphone and try again.');
+    const msg = e.name === 'NotAllowedError'
+      ? 'Microphone access denied. Please allow microphone and try again.'
+      : 'Could not start recording: ' + e.message;
+    showErr(mode === 'study' ? 'studyError' : 'practiceError', msg);
   }
 }
 
 function stopVoice() {
   if (!scriptProc) return;
+  scriptProc.port.postMessage('stop');
   scriptProc._stream.getTracks().forEach(t => t.stop());
-  scriptProc.disconnect(); audioCtx.close();
+  scriptProc.disconnect();
+  audioCtx.close();
   const mode = activeVoice;
   activeVoice = null;
   stopTimer(mode);
