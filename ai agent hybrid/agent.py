@@ -15,6 +15,13 @@ Memory tiers:
   - Documents  — RAG chunks from files + chat history (ChromaDB documents, HNSW)
 """
 
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from repo root (two levels up from this file)
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 import google.genai as genai
 from google.genai import types as genai_types
 import ollama
@@ -51,7 +58,7 @@ class HybridAgent:
         self.system_prompt  = system_prompt or self._default_system_prompt()
 
         # Gemini client — direct API, used for final answer generation
-        self._gemini_client = genai.Client(api_key="AIzaSyAVp80ixdWFr28iam_iqTMA_vwXDZ2HtdE")
+        self._gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
         # Memory stack
         self.memory_manager      = MemoryManager(data_dir=data_dir,
