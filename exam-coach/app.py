@@ -2,16 +2,16 @@
 app.py — FastAPI Server for ExamGuard Study Buddy & Exam Coach
 ==============================================================
 Architecture:
-  Study mode  → cactus built-in RAG (cactus_init with corpus_dir + cactus_rag_query)
-                No hardcoded prompts — retrieval is fully automatic.
+  Study mode  → PDF text written to corpus dir → cactus_init(corpus_dir) embeds it
+                cactus_rag_query retrieves top-k chunks → FunctionGemma answers from context
   Practice    → FunctionGemma tool-calling for structured score output
   STT         → Whisper-tiny via cactus_transcribe
 
 Endpoints:
   GET  /            → mobile UI
-  POST /upload-pdf  → extract PDF text → write corpus.txt → reload RAG model
-  POST /ask         → cactus_rag_query(question) → top-k chunks returned
-  POST /quiz        → pick sentences from corpus as practice question
+  POST /upload-pdf  → extract PDF → write corpus.txt → init RAG model
+  POST /ask         → cactus_rag_query + FunctionGemma answer
+  POST /quiz        → pick a sentence from PDF as practice question
   POST /feedback    → FunctionGemma scores the student's answer
   POST /transcribe  → Whisper STT
   GET  /health
@@ -20,6 +20,7 @@ Endpoints:
 import os
 import re
 import sys
+import json
 import tempfile
 import shutil
 from pathlib import Path
@@ -33,6 +34,13 @@ from pydantic import BaseModel
 from stt import SpeechToText
 from coach import ExamCoach
 from pdf_reader import extract_text, get_relevant_context
+
+# ── Cactus SDK ───────────────────────────────────────────────────────────────
+CACTUS_REPO = Path(__file__).parent.parent.parent / "cactus"
+sys.path.insert(0, str(CACTUS_REPO / "python" / "src"))
+from cactus import cactus_init, cactus_complete, cactus_rag_query, cactus_destroy, cactus_reset
+
+LLM_PATH = str(CACTUS_REPO / "weights" / "functiongemma-270m-it")
 
 # ── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(title="ExamGuard")
@@ -50,20 +58,24 @@ except RuntimeError as e:
 coach = ExamCoach()
 print("  ✓ FunctionGemma (scoring) ready")
 
-_pdf_text = ""
-_pdf_name = ""
+# ── RAG state ─────────────────────────────────────────────────────────────────
+_pdf_text    = ""
+_pdf_name    = ""
+_rag_model   = None          # FunctionGemma instance initialised with corpus_dir
+_corpus_dir  = None          # temp dir holding corpus.txt for RAG
 
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "index.html"
 print("\nExamGuard is running at http://localhost:8000\n")
 
 
-# ── Exception handler for upload validation (e.g. missing form field "pdf") ─────
+# ── Exception handler for upload validation ───────────────────────────────────
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     if request.url.path == "/upload-pdf" and exc.errors():
         msg = "Please select a PDF file and try again. (Form field must be 'pdf'.)"
         return JSONResponse(status_code=422, content={"detail": msg})
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -81,14 +93,15 @@ async def health():
         "stt_ready":  stt is not None,
         "pdf_loaded": bool(_pdf_text),
         "pdf_name":   _pdf_name or None,
+        "rag_ready":  _rag_model is not None,
         "on_device":  True,
     }
 
 
 @app.post("/upload-pdf")
-async def upload_pdf(pdf: UploadFile = File(..., description="PDF file (form field name must be 'pdf')")):
-    """Extract PDF text and store in memory for keyword-based retrieval."""
-    global _pdf_text, _pdf_name
+async def upload_pdf(pdf: UploadFile = File(...)):
+    """Extract PDF text, write corpus, and initialise the RAG model."""
+    global _pdf_text, _pdf_name, _rag_model, _corpus_dir
 
     if not pdf.filename or not str(pdf.filename).lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
@@ -105,9 +118,32 @@ async def upload_pdf(pdf: UploadFile = File(..., description="PDF file (form fie
         text = extract_text(tmp_pdf)
         if not text.strip():
             raise HTTPException(status_code=400, detail="PDF appears to be empty or image-only.")
+
+        # ── Tear down old RAG model if one exists ──────────────────────────
+        if _rag_model is not None:
+            try:
+                cactus_destroy(_rag_model)
+            except Exception:
+                pass
+            _rag_model = None
+
+        # ── Write corpus file ──────────────────────────────────────────────
+        if _corpus_dir is None:
+            _corpus_dir = tempfile.mkdtemp(prefix="examguard_corpus_")
+        corpus_file = Path(_corpus_dir) / "corpus.txt"
+        corpus_file.write_text(text, encoding="utf-8")
+
+        # ── Init FunctionGemma with corpus_dir for RAG ─────────────────────
+        print(f"  [RAG] Indexing corpus ({len(text)} chars)…")
+        _rag_model = cactus_init(LLM_PATH, corpus_dir=_corpus_dir, cache_index=False)
+        if _rag_model is None:
+            print("  [RAG] Warning: RAG model init failed, will fall back to keyword search.")
+
         _pdf_text = text
         _pdf_name = pdf.filename
+        print(f"  [RAG] Ready — {pdf.filename}")
         return JSONResponse({"success": True, "filename": pdf.filename, "chars": len(text)})
+
     except HTTPException:
         raise
     except Exception as e:
@@ -123,11 +159,28 @@ class AskRequest(BaseModel):
     question: str
 
 
+def _is_greeting(question: str) -> bool:
+    """Return True if the question has no meaningful study-related keywords."""
+    stop = {
+        "a","an","the","is","are","was","were","be","been","being","have","has","had",
+        "do","does","did","will","would","could","should","may","might","shall",
+        "what","when","where","who","which","how","why","and","or","but","in","on",
+        "at","to","for","of","with","by","from","about","this","that","these","those",
+        "my","your","his","her","its","our","their","i","you","he","she","it","we",
+        "they","me","him","us","them","not","no","s","t","don","isn","can","just",
+        "also","very","more","than","hey","hi","hello","sup","yes","no","ok","okay"
+    }
+    words = set(re.findall(r'\b\w+\b', question.lower()))
+    meaningful = {w for w in words - stop if len(w) > 2}
+    greetings  = {"hey","hi","hello","sup","whats","there","guys","bro"}
+    return not meaningful or meaningful <= greetings
+
+
 @app.post("/ask")
 async def ask(req: AskRequest):
     """
-    Study mode: find the most relevant passages in the PDF for the question.
-    Uses keyword + density scoring across paragraphs — returns text directly.
+    Study mode: RAG retrieval via cactus_rag_query → FunctionGemma answer.
+    Falls back to keyword search if RAG model is not available.
     """
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Please ask a question.")
@@ -139,43 +192,71 @@ async def ask(req: AskRequest):
             "key_points": [],
         })
 
-    # Detect greetings / off-topic so we always return a clear response
-    _q = req.question.strip().lower()
-    _words = set(re.findall(r'\b\w+\b', _q))
-    _stop = {"a","an","the","is","are","was","were","be","been","being", "have","has","had","do","does","did","will","would","could", "should","may","might","shall","what","when","where","who","which","how","why","and","or","but","in","on","at","to","for","of","with","by","from","about","this","that","these","those","my","your","his","her","its","our","their","i","you","he","she","it","we","they","me","him","us","them","not","no","s","t","don","isn","can","just","also","very","more","than","hey","hi","hello","sup","yes","no"}
-    _meaningful = _words - _stop
-    _meaningful = {w for w in _meaningful if len(w) > 2}
-    _greetings = {"hey", "hi", "hello", "sup", "whats", "what"}
-    if not _meaningful or _meaningful <= _greetings:
+    if _is_greeting(req.question):
         return JSONResponse({
             "success":    True,
-            "answer":     "Ask me something about your PDF. For example: \"What is Big Data?\", \"Explain the first chapter\", or \"What are the key points?\"",
+            "answer":     'Ask me something about your PDF — e.g. "What is Big Data?", "Explain chapter 1", "What are the key topics?"',
             "key_points": [],
         })
 
-    # Get top relevant passage (main answer)
-    answer = get_relevant_context(_pdf_text, req.question, max_chars=800)
+    # ── Step 1: RAG retrieval ─────────────────────────────────────────────────
+    context = ""
+    if _rag_model is not None:
+        try:
+            chunks = cactus_rag_query(_rag_model, req.question, top_k=4)
+            if chunks:
+                context = "\n\n".join(c["text"] for c in chunks if c.get("text"))[:1200]
+                print(f"  [RAG] Retrieved {len(chunks)} chunks")
+        except Exception as e:
+            print(f"  [RAG] Query error: {e}")
 
-    sentences = re.split(r'(?<=[.!?])\s+', answer)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    key_points = [s for s in sentences if len(s) > 40]
+    # Fallback: keyword search if RAG returned nothing
+    if not context:
+        context = get_relevant_context(_pdf_text, req.question, max_chars=800)
 
-    # Main explanation: full sentences up to ~600 chars (no mid-sentence cut)
-    max_main_chars = 600
-    main_parts = []
-    total = 0
-    for s in sentences:
-        if total + len(s) + (1 if main_parts else 0) <= max_main_chars:
-            main_parts.append(s)
-            total += len(s) + (1 if main_parts else 0)
-        else:
-            break
-    main = " ".join(main_parts) if main_parts else answer[:max_main_chars].strip()
-    bullets = key_points[2:5] if len(key_points) > 2 else []
+    # ── Step 2: FunctionGemma generates an answer from context ────────────────
+    answer = ""
+    if _rag_model is not None:
+        try:
+            prompt = (
+                f"You are a study assistant. Answer the question using ONLY the study material below. "
+                f"Be concise and clear.\n\n"
+                f"Study material:\n{context}\n\n"
+                f"Question: {req.question}\n\nAnswer:"
+            )
+            raw = cactus_complete(
+                _rag_model,
+                [{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.2,
+                stop_sequences=["<|im_end|>", "<end_of_turn>", "\n\nQuestion:"],
+            )
+            result = json.loads(raw)
+            answer = (result.get("response") or "").strip()
+            print(f"  [LLM] Answer: {answer[:80]}…")
+        except Exception as e:
+            print(f"  [LLM] Generation error: {e}")
+
+    # Fallback: return context directly if LLM gave nothing
+    if not answer:
+        sentences = re.split(r'(?<=[.!?])\s+', context)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        main_parts, total = [], 0
+        for s in sentences:
+            if total + len(s) <= 600:
+                main_parts.append(s)
+                total += len(s)
+            else:
+                break
+        answer = " ".join(main_parts) if main_parts else context[:600].strip()
+
+    # ── Step 3: Extract key points from the retrieved context ─────────────────
+    ctx_sentences = re.split(r'(?<=[.!?])\s+', context)
+    bullets = [s.strip() for s in ctx_sentences if len(s.strip()) > 50][:3]
 
     return JSONResponse({
         "success":    True,
-        "answer":     main,
+        "answer":     answer,
         "key_points": bullets,
     })
 
@@ -188,7 +269,7 @@ class QuizRequest(BaseModel):
 async def quiz(req: QuizRequest):
     """Practice mode: pick a sentence from the PDF as a practice question."""
     if _pdf_text:
-        query = req.topic.strip() or "definition concept example"
+        query   = req.topic.strip() or "definition concept example"
         passage = get_relevant_context(_pdf_text, query, max_chars=600)
         sentences = re.split(r'(?<=[.!?])\s+', passage)
         long_s = [s.strip() for s in sentences if len(s.strip()) > 50]
@@ -213,10 +294,7 @@ class FeedbackRequest(BaseModel):
 
 @app.post("/feedback")
 async def feedback(req: FeedbackRequest):
-    """
-    Practice mode: FunctionGemma scores the student's answer via tool-calling.
-    Uses RAG to optionally pull context for scoring.
-    """
+    """Practice mode: FunctionGemma scores the student's answer via tool-calling."""
     pdf_context = ""
     if _pdf_text and (req.question or req.transcript):
         query = req.question or req.transcript
@@ -245,7 +323,7 @@ async def transcribe(audio: UploadFile = File(...)):
 
     suffix = ".wav"
     ct = audio.content_type or ""
-    if "mp4" in ct:   suffix = ".mp4"
+    if "mp4" in ct:    suffix = ".mp4"
     elif "webm" in ct: suffix = ".webm"
 
     audio_bytes = await audio.read()
@@ -258,7 +336,6 @@ async def transcribe(audio: UploadFile = File(...)):
     try:
         transcript = stt.transcribe(tmp_path)
         if not transcript:
-            # Empty = silent recording or too short — tell the user clearly
             return JSONResponse({
                 "transcript": "",
                 "success": False,
