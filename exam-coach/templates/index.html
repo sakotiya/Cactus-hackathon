@@ -52,13 +52,26 @@
       margin: 1rem 1.25rem 0;
     }
     .pdf-upload-btn {
-      flex-shrink: 0; padding: 0.4rem 0.85rem; border-radius: 0.55rem;
+      flex-shrink: 0; padding: 0.4rem 0.85rem; border-radius: 0.55rem; cursor: pointer; display: inline-block;
       border: 1px dashed var(--border); background: transparent;
       color: var(--muted); font-size: 0.78rem; font-weight: 600;
-      cursor: pointer; transition: border-color 0.2s, color 0.2s; white-space: nowrap;
+      transition: border-color 0.2s, color 0.2s; white-space: nowrap;
     }
     .pdf-upload-btn:hover { border-color: var(--green); color: var(--green); }
-    #pdfInput { display: none; }
+    #pdfInput {
+      flex-shrink: 0;
+      padding: 0.4rem 0.85rem;
+      border-radius: 0.55rem;
+      border: 1px dashed var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #pdfInput:hover { border-color: var(--green); color: var(--green); }
     .pdf-status { font-size: 0.78rem; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pdf-status.loaded { color: var(--green); }
     .pdf-clear { flex-shrink: 0; background: transparent; border: none; color: #484f58; font-size: 0.85rem; cursor: pointer; display: none; }
@@ -221,12 +234,9 @@
 
 <!-- ── PDF Upload bar ──────────────────────────────────────────────── -->
 <div class="pdf-bar">
-  <button class="pdf-upload-btn" onclick="document.getElementById('pdfInput').click()">
-    📄 Upload PDF
-  </button>
-  <input type="file" id="pdfInput" accept=".pdf" onchange="handlePdfUpload(this)">
+  <input type="file" id="pdfInput" accept=".pdf">
   <span class="pdf-status" id="pdfStatus">Upload your study PDF to get started</span>
-  <button class="pdf-clear" id="pdfClear" onclick="clearPdf()" title="Remove">✕</button>
+  <button type="button" class="pdf-clear" id="pdfClear" onclick="clearPdf()" title="Remove">✕</button>
 </div>
 
 <!-- ── Mode tabs ───────────────────────────────────────────────────── -->
@@ -388,8 +398,11 @@ function switchMode(mode) {
 // ── PDF Upload ────────────────────────────────────────────────────────
 async function handlePdfUpload(input) {
   const file = input.files[0];
-  if (!file) return;
   const st = document.getElementById('pdfStatus');
+  if (!file) {
+    st.textContent = 'Upload your study PDF to get started';
+    return;
+  }
   st.textContent = 'Uploading…'; st.classList.remove('loaded');
 
   const fd = new FormData();
@@ -397,19 +410,19 @@ async function handlePdfUpload(input) {
   try {
     const res = await fetch('/upload-pdf', { method: 'POST', body: fd });
     const bodyText = await res.text();
-    let d;
-    try { d = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { d = {}; }
+    let d = {};
+    try { if (bodyText) d = JSON.parse(bodyText); } catch (_) {}
     if (!res.ok) {
       const detail = d.detail;
       const msg = Array.isArray(detail) ? (detail[0] && detail[0].msg) || 'Upload failed' : (detail || 'Upload failed');
       throw new Error(typeof msg === 'string' ? msg : 'Upload failed');
     }
-    st.textContent = `✓ ${d.filename || file.name} (${Math.round((d.chars || 0) / 1000)}k chars)`;
+    st.textContent = '✓ ' + (d.filename || file.name) + ' (' + Math.round((d.chars || 0) / 1000) + 'k chars)';
     st.classList.add('loaded');
     document.getElementById('pdfClear').classList.add('show');
     pdfLoaded = true;
   } catch(e) {
-    st.textContent = `✗ ${e.message}`;
+    st.textContent = '✗ ' + (e.message || 'Upload failed');
   }
   input.value = '';
 }
@@ -713,6 +726,11 @@ function esc(t) {
   d.appendChild(document.createTextNode(t));
   return d.innerHTML;
 }
+
+// ── Wire up file input (all functions are defined above this point) ───
+document.getElementById('pdfInput').addEventListener('change', function() {
+  handlePdfUpload(this);
+});
 </script>
 </body>
 </html>
