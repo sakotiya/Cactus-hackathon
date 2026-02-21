@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ExamGuard – Privacy Coach</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #30363d;
+      --green:     #10b981;
+      --green-dk:  #065f46;
+      --red:       #ef4444;
+      --text:      #f0f6fc;
+      --muted:     #8b949e;
+      --card-bg:   #1c2128;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ───────────────────────────────────── */
+    .header {
+      background: linear-gradient(160deg, #064e3b 0%, #065f46 60%, #047857 100%);
+      padding: 2rem 1.5rem 1.75rem;
+      text-align: center;
+      border-radius: 0 0 1.5rem 1.5rem;
+      box-shadow: 0 4px 24px rgba(16,185,129,0.15);
+    }
+    .logo { font-size: 2.5rem; line-height: 1; margin-bottom: 0.35rem; }
+    .header h1 { font-size: 1.8rem; font-weight: 800; letter-spacing: -0.5px; }
+    .header p  { color: #a7f3d0; font-size: 0.875rem; margin-top: 0.2rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      background: rgba(0,0,0,0.3); color: #d1fae5;
+      padding: 0.35rem 0.9rem; border-radius: 99px;
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px;
+      margin-top: 0.85rem; text-transform: uppercase;
+    }
+
+    /* ── Main content ─────────────────────────────── */
+    .content { padding: 1.75rem 1.25rem 1rem; flex: 1; }
+
+    .instruction {
+      text-align: center; color: var(--muted);
+      font-size: 0.875rem; line-height: 1.6;
+      margin-bottom: 2rem;
+    }
+    .instruction strong { color: var(--text); }
+
+    /* ── Record button ────────────────────────────── */
+    .record-wrap {
+      display: flex; flex-direction: column;
+      align-items: center; margin-bottom: 2rem;
+    }
+    .record-btn {
+      width: 130px; height: 130px; border-radius: 50%; border: none;
+      cursor: pointer; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 0.3rem;
+      font-weight: 800; font-size: 0.7rem; letter-spacing: 1px;
+      text-transform: uppercase; transition: transform 0.15s, box-shadow 0.15s;
+      outline: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    }
+    .record-btn:active { transform: scale(0.95); }
+    .record-btn.idle {
+      background: linear-gradient(135deg, var(--green), #059669);
+      color: white;
+      box-shadow: 0 0 0 0 rgba(16,185,129,0.4), 0 8px 24px rgba(16,185,129,0.3);
+    }
+    .record-btn.recording {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      color: white;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    .record-btn.processing {
+      background: var(--surface); color: var(--muted);
+      cursor: not-allowed; box-shadow: none;
+    }
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.55); }
+      70%  { box-shadow: 0 0 0 22px rgba(239,68,68,0); }
+      100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+    }
+    .record-icon  { font-size: 2.8rem; line-height: 1; }
+    .record-label { font-size: 0.65rem; letter-spacing: 1.5px; margin-top: 0.1rem; }
+
+    .timer {
+      margin-top: 0.75rem; font-size: 0.825rem; font-weight: 700;
+      color: var(--red); font-variant-numeric: tabular-nums;
+      min-height: 1.4em; letter-spacing: 0.5px;
+    }
+
+    /* ── Loading ──────────────────────────────────── */
+    .loading {
+      display: none; text-align: center; padding: 1.5rem 0;
+    }
+    .loading.show { display: block; }
+    .spinner {
+      width: 38px; height: 38px; border-radius: 50%;
+      border: 3px solid var(--border); border-top-color: var(--green);
+      animation: spin 0.75s linear infinite; margin: 0 auto 0.85rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text  { color: var(--muted); font-size: 0.85rem; }
+    .loading-step  { color: var(--green); font-size: 0.8rem; font-weight: 600; margin-top: 0.2rem; }
+
+    /* ── Result cards ─────────────────────────────── */
+    .card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 1rem; padding: 1.1rem 1.25rem;
+      margin-bottom: 0.85rem; display: none;
+    }
+    .card.show { display: block; }
+    .card-label {
+      font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--muted); font-weight: 700; margin-bottom: 0.5rem;
+    }
+    .transcript-text {
+      color: #c9d1d9; font-size: 0.925rem; line-height: 1.65; font-style: italic;
+    }
+
+    /* Score */
+    .score-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+    .score-circle {
+      width: 64px; height: 64px; border-radius: 50%; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--green-dk), var(--green));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.15rem; font-weight: 900; color: white;
+    }
+    .score-title { font-size: 1.05rem; font-weight: 700; }
+    .score-sub   { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+
+    /* Bullets */
+    .bullets-label {
+      font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--muted); font-weight: 700; margin-bottom: 0.5rem;
+    }
+    .bullet {
+      display: flex; align-items: flex-start; gap: 0.65rem;
+      padding: 0.55rem 0; border-bottom: 1px solid var(--border);
+      font-size: 0.875rem; color: #c9d1d9; line-height: 1.5;
+    }
+    .bullet:last-child { border-bottom: none; }
+    .bullet-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green); flex-shrink: 0; margin-top: 5px;
+    }
+
+    /* ── Try again ────────────────────────────────── */
+    .try-again {
+      display: none; width: 100%; padding: 0.875rem;
+      background: transparent; border: 1px solid var(--border);
+      color: var(--muted); border-radius: 0.75rem;
+      font-size: 0.9rem; font-weight: 600; cursor: pointer;
+      margin-bottom: 1rem; transition: border-color 0.2s, color 0.2s;
+    }
+    .try-again:hover { border-color: var(--green); color: var(--green); }
+    .try-again.show { display: block; }
+
+    /* ── Error ────────────────────────────────────── */
+    .error {
+      display: none; background: #1c0a0a; border: 1px solid #7f1d1d;
+      color: #fca5a5; padding: 0.75rem 1rem; border-radius: 0.75rem;
+      font-size: 0.85rem; margin-bottom: 0.85rem;
+    }
+    .error.show { display: block; }
+
+    /* ── Footer ───────────────────────────────────── */
+    .footer {
+      text-align: center; padding: 1rem 1.5rem 1.75rem;
+      color: #484f58; font-size: 0.72rem; line-height: 1.7;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────── -->
+<div class="header">
+  <div class="logo">🌵</div>
+  <h1>ExamGuard</h1>
+  <p>AI-powered exam practice coach</p>
+  <div class="badge">🔒 100% On-Device &nbsp;·&nbsp; No Cloud &nbsp;·&nbsp; No Tracking</div>
+</div>
+
+<!-- ── Main ───────────────────────────────────────────────────────── -->
+<div class="content">
+
+  <p class="instruction">
+    Tap <strong>Record</strong>, speak your practice answer,<br>
+    tap again to stop — get instant on-device feedback.
+  </p>
+
+  <!-- Record button -->
+  <div class="record-wrap">
+    <button class="record-btn idle" id="recordBtn" onclick="toggleRecording()">
+      <span class="record-icon">🎙️</span>
+      <span class="record-label" id="btnLabel">Record</span>
+    </button>
+    <div class="timer" id="timer"></div>
+  </div>
+
+  <!-- Error message -->
+  <div class="error" id="errorBox"></div>
+
+  <!-- Loading indicator -->
+  <div class="loading" id="loadingBox">
+    <div class="spinner"></div>
+    <div class="loading-text" id="loadingText">Processing your answer…</div>
+    <div class="loading-step"  id="loadingStep">Running on-device AI</div>
+  </div>
+
+  <!-- Transcript card -->
+  <div class="card" id="transcriptCard">
+    <div class="card-label">📝 Your Answer (Transcript)</div>
+    <div class="transcript-text" id="transcriptText"></div>
+  </div>
+
+  <!-- Feedback card -->
+  <div class="card" id="feedbackCard">
+    <div class="score-row">
+      <div class="score-circle" id="scoreCircle">?</div>
+      <div>
+        <div class="score-title" id="scoreTitle">Score</div>
+        <div class="score-sub">Clarity · Structure · Completeness</div>
+      </div>
+    </div>
+    <div class="bullets-label">💡 Suggestions</div>
+    <div id="bulletsList"></div>
+  </div>
+
+  <!-- Try again -->
+  <button class="try-again" id="tryAgainBtn" onclick="reset()">↩ Try Again</button>
+
+</div><!-- .content -->
+
+<!-- ── Footer ─────────────────────────────────────────────────────── -->
+<div class="footer">
+  🔒 All audio and AI processing happens entirely on this device.<br>
+  No data is ever sent to any server or third party.
+</div>
+
+<!-- ── JavaScript ──────────────────────────────────────────────────── -->
+<script>
+  // ── State ──────────────────────────────────────────────────────────
+  let mediaRecorder = null;
+  let audioCtx      = null;
+  let scriptProc    = null;
+  let allSamples    = [];
+  let sampleRate    = 16000;
+  let isRecording   = false;
+  let timerInterval = null;
+  let elapsed       = 0;
+  const MAX_SECS    = 60;
+
+  // ── Toggle recording ───────────────────────────────────────────────
+  function toggleRecording() {
+    isRecording ? stopRecording() : startRecording();
+  }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Capture raw PCM via Web Audio API (no ffmpeg needed)
+      audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ sampleRate });
+      const src  = audioCtx.createMediaStreamSource(stream);
+      scriptProc = audioCtx.createScriptProcessor(4096, 1, 1);
+      allSamples = [];
+
+      scriptProc.onaudioprocess = e => {
+        const buf = e.inputBuffer.getChannelData(0);
+        allSamples.push(new Float32Array(buf));
+      };
+
+      src.connect(scriptProc);
+      scriptProc.connect(audioCtx.destination);
+
+      // Keep stream reference so we can stop tracks
+      scriptProc._stream = stream;
+
+      isRecording = true;
+      setBtn("recording", "Stop");
+      hideError(); hideResults();
+      startTimer();
+
+    } catch (err) {
+      showError("Microphone access denied. Please allow microphone and try again.");
+    }
+  }
+
+  function stopRecording() {
+    if (!scriptProc) return;
+    scriptProc._stream.getTracks().forEach(t => t.stop());
+    scriptProc.disconnect();
+    audioCtx.close();
+    isRecording = false;
+    stopTimer();
+    setBtn("processing", "Wait…");
+    processAudio();
+  }
+
+  // ── WAV encoding (no ffmpeg needed) ──────────────────────────────
+  function encodeWAV(samples, rate) {
+    const len    = samples.length;
+    const buffer = new ArrayBuffer(44 + len * 2);
+    const view   = new DataView(buffer);
+
+    function writeStr(off, s) {
+      for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+    }
+
+    writeStr(0,  "RIFF");
+    view.setUint32(4,  36 + len * 2, true);
+    writeStr(8,  "WAVE");
+    writeStr(12, "fmt ");
+    view.setUint32(16, 16,     true);
+    view.setUint16(20, 1,      true);  // PCM
+    view.setUint16(22, 1,      true);  // mono
+    view.setUint32(24, rate,   true);
+    view.setUint32(28, rate*2, true);
+    view.setUint16(32, 2,      true);
+    view.setUint16(34, 16,     true);
+    writeStr(36, "data");
+    view.setUint32(40, len * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < len; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      offset += 2;
+    }
+    return buffer;
+  }
+
+  async function processAudio() {
+    // Merge all captured chunks into one Float32Array
+    const total  = allSamples.reduce((n, a) => n + a.length, 0);
+    const merged = new Float32Array(total);
+    let offset   = 0;
+    for (const chunk of allSamples) { merged.set(chunk, offset); offset += chunk.length; }
+
+    // Encode as WAV
+    const wavBuffer = encodeWAV(merged, sampleRate);
+    const wavBlob   = new Blob([wavBuffer], { type: "audio/wav" });
+
+    showLoading("Transcribing speech…", "Running Whisper on-device");
+
+    try {
+      // Step 1 — Transcribe
+      const formData = new FormData();
+      formData.append("audio", wavBlob, "recording.wav");
+
+      const tRes = await fetch("/transcribe", { method: "POST", body: formData });
+      if (!tRes.ok) {
+        const e = await tRes.json().catch(() => ({ detail: "Transcription error" }));
+        throw new Error(e.detail || "Transcription failed");
+      }
+      const { transcript } = await tRes.json();
+      showTranscript(transcript);
+
+      // Step 2 — Feedback
+      setLoadingStep("Getting AI feedback…", "Running LLM on-device");
+
+      const fRes = await fetch("/feedback", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ transcript }),
+      });
+      if (!fRes.ok) {
+        const e = await fRes.json().catch(() => ({ detail: "Feedback error" }));
+        throw new Error(e.detail || "Feedback failed");
+      }
+      const feedback = await fRes.json();
+      showFeedback(feedback);
+
+      hideLoading();
+      setBtn("idle", "Record");
+      document.getElementById("tryAgainBtn").classList.add("show");
+
+    } catch (err) {
+      hideLoading();
+      setBtn("idle", "Record");
+      showError(err.message || "Something went wrong. Please try again.");
+    }
+  }
+
+  // ── Timer ──────────────────────────────────────────────────────────
+  function startTimer() {
+    elapsed = 0;
+    updateTimer();
+    timerInterval = setInterval(() => {
+      elapsed++;
+      updateTimer();
+      if (elapsed >= MAX_SECS) stopRecording();
+    }, 1000);
+  }
+  function stopTimer()  { clearInterval(timerInterval); document.getElementById("timer").textContent = ""; }
+  function updateTimer(){ document.getElementById("timer").textContent = `● REC ${elapsed}s / ${MAX_SECS}s`; }
+
+  // ── UI helpers ─────────────────────────────────────────────────────
+  function setBtn(state, label) {
+    const btn = document.getElementById("recordBtn");
+    btn.className = `record-btn ${state}`;
+    document.getElementById("btnLabel").textContent = label;
+  }
+
+  function showLoading(text, step) {
+    document.getElementById("loadingBox").classList.add("show");
+    document.getElementById("loadingText").textContent = text;
+    document.getElementById("loadingStep").textContent = step;
+  }
+  function setLoadingStep(text, step) {
+    document.getElementById("loadingText").textContent = text;
+    document.getElementById("loadingStep").textContent = step;
+  }
+  function hideLoading() { document.getElementById("loadingBox").classList.remove("show"); }
+
+  function showTranscript(text) {
+    document.getElementById("transcriptText").textContent = text || "(no speech detected)";
+    document.getElementById("transcriptCard").classList.add("show");
+  }
+
+  function showFeedback(data) {
+    const score = data.score || "?";
+    document.getElementById("scoreCircle").textContent = score.split("/")[0];
+    document.getElementById("scoreTitle").textContent  = `Score: ${score}`;
+
+    const bullets = data.bullets || [];
+    document.getElementById("bulletsList").innerHTML = bullets.map(b =>
+      `<div class="bullet"><div class="bullet-dot"></div><span>${esc(b)}</span></div>`
+    ).join("");
+
+    document.getElementById("feedbackCard").classList.add("show");
+  }
+
+  function hideResults() {
+    ["transcriptCard","feedbackCard"].forEach(id =>
+      document.getElementById(id).classList.remove("show"));
+    document.getElementById("tryAgainBtn").classList.remove("show");
+  }
+
+  function showError(msg) {
+    const el = document.getElementById("errorBox");
+    el.textContent = msg; el.classList.add("show");
+  }
+  function hideError() { document.getElementById("errorBox").classList.remove("show"); }
+
+  function reset() {
+    hideResults(); hideError(); hideLoading();
+    setBtn("idle", "Record");
+    document.getElementById("timer").textContent = "";
+  }
+
+  function esc(t) {
+    const d = document.createElement("div");
+    d.appendChild(document.createTextNode(t));
+    return d.innerHTML;
+  }
+</script>
+</body>
+</html>
