@@ -156,6 +156,39 @@
       background: var(--green); flex-shrink: 0; margin-top: 5px;
     }
 
+    /* ── Text answer ──────────────────────────────── */
+    .divider {
+      display: flex; align-items: center; gap: 0.75rem;
+      color: var(--muted); font-size: 0.72rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 1px; margin: 1.25rem 0;
+    }
+    .divider::before, .divider::after {
+      content: ""; flex: 1; height: 1px; background: var(--border);
+    }
+
+    .text-answer-wrap {
+      margin-bottom: 1.5rem;
+    }
+    .text-answer-input {
+      width: 100%; background: var(--card-bg); border: 1px solid var(--border);
+      color: var(--text); border-radius: 0.75rem 0.75rem 0 0;
+      padding: 0.75rem 1rem; font-size: 0.9rem; line-height: 1.5;
+      resize: none; outline: none; transition: border-color 0.2s;
+      font-family: inherit; min-height: 80px;
+    }
+    .text-answer-input::placeholder { color: #484f58; }
+    .text-answer-input:focus { border-color: var(--green); }
+    .send-btn {
+      width: 100%; padding: 0.7rem;
+      background: linear-gradient(135deg, var(--green), #059669);
+      border: none; border-radius: 0 0 0.75rem 0.75rem;
+      color: white; font-size: 0.9rem; font-weight: 700;
+      cursor: pointer; transition: opacity 0.2s;
+      letter-spacing: 0.3px;
+    }
+    .send-btn:hover { opacity: 0.9; }
+    .send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
     /* ── Try again ────────────────────────────────── */
     .try-again {
       display: none; width: 100%; padding: 0.875rem;
@@ -308,6 +341,21 @@
       <span class="record-label" id="btnLabel">Record</span>
     </button>
     <div class="timer" id="timer"></div>
+  </div>
+
+  <!-- OR divider + Text answer box -->
+  <div class="divider">or type your answer</div>
+
+  <div class="text-answer-wrap">
+    <textarea
+      id="textAnswerInput"
+      class="text-answer-input"
+      rows="3"
+      placeholder="Type your answer here and click Send…"
+    ></textarea>
+    <button class="send-btn" id="sendBtn" onclick="submitTextAnswer()">
+      ➤ Send Answer
+    </button>
   </div>
 
   <!-- Error message -->
@@ -631,6 +679,59 @@
     hideResults(); hideError(); hideLoading();
     setBtn("idle", "Record");
     document.getElementById("timer").textContent = "";
+    document.getElementById("textAnswerInput").value = "";
+    document.getElementById("sendBtn").disabled = false;
+  }
+
+  // ── Submit typed answer (no recording needed) ─────────────────────
+  async function submitTextAnswer() {
+    const answer = document.getElementById("textAnswerInput").value.trim();
+    if (!answer) {
+      showError("Please type your answer first.");
+      return;
+    }
+
+    const sendBtn = document.getElementById("sendBtn");
+    sendBtn.disabled = true;
+    hideError(); hideResults();
+
+    // Show it as a transcript immediately
+    showTranscript(answer);
+
+    const question = document.getElementById("questionInput").value.trim();
+    const hasPdf   = document.getElementById("pdfStatus").classList.contains("loaded");
+    const stepMsg  = hasPdf ? "Scoring against your PDF…"
+                   : question ? "Scoring against your question…"
+                   : "Getting AI feedback…";
+    showLoading(stepMsg, "Running LLM on-device");
+
+    // Show question banner if set
+    if (question) {
+      document.getElementById("questionBannerText").textContent = question;
+      document.getElementById("questionBanner").classList.add("show");
+    }
+
+    try {
+      const fRes = await fetch("/feedback", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ transcript: answer, question }),
+      });
+      if (!fRes.ok) {
+        const e = await fRes.json().catch(() => ({ detail: "Feedback error" }));
+        throw new Error(e.detail || "Feedback failed");
+      }
+      const feedback = await fRes.json();
+      showFeedback(feedback, question);
+
+      hideLoading();
+      document.getElementById("tryAgainBtn").classList.add("show");
+    } catch (err) {
+      hideLoading();
+      showError(err.message || "Something went wrong. Please try again.");
+    } finally {
+      sendBtn.disabled = false;
+    }
   }
 
   function esc(t) {
