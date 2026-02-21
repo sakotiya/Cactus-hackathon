@@ -48,14 +48,31 @@ class SpeechToText:
             audio_path: Path to a WAV file (16kHz mono recommended)
 
         Returns:
-            Transcribed text string
+            Transcribed text string (empty string if silent or too short)
         """
         model = cactus_init(self.model_path)
         try:
             raw = cactus_transcribe(model, audio_path, prompt=WHISPER_PROMPT)
-            result = json.loads(raw)
+
+            # Raw can be empty or invalid JSON when audio is silent/too short
+            if not raw or not raw.strip():
+                return ""
+
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                # Whisper sometimes returns partial text instead of JSON
+                # when audio is very short — treat it as the transcript
+                text = raw.strip()
+                return text if len(text) < 1000 else ""
+
             if not result.get("success"):
-                raise RuntimeError(f"Transcription failed: {result.get('error')}")
+                # Silent audio returns success=false — not a real error
+                error = result.get("error", "")
+                if "silent" in str(error).lower() or "empty" in str(error).lower():
+                    return ""
+                raise RuntimeError(f"Transcription failed: {error}")
+
             return (result.get("response") or "").strip()
         finally:
             cactus_destroy(model)

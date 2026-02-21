@@ -220,6 +220,13 @@ async def transcribe(audio: UploadFile = File(...)):
 
     try:
         transcript = stt.transcribe(tmp_path)
+        if not transcript:
+            # Empty = silent recording or too short — tell the user clearly
+            return JSONResponse({
+                "transcript": "",
+                "success": False,
+                "detail": "No speech detected. Please speak clearly and try again."
+            }, status_code=200)
         return JSONResponse({"transcript": transcript, "success": True})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

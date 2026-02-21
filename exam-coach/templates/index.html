@@ -166,6 +166,12 @@
     .result-card.show { display: block; }
     .card-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); font-weight: 700; margin-bottom: 0.6rem; }
 
+    /* Chat history */
+    .chat-item { background: var(--card); border: 1px solid var(--border); border-radius: 1rem; padding: 1rem 1.25rem; margin-bottom: 0.75rem; }
+    .chat-q { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--green); margin-bottom: 0.35rem; }
+    .chat-q-text { font-size: 0.88rem; color: var(--text); font-weight: 600; margin-bottom: 0.75rem; }
+    .chat-divider { height: 1px; background: var(--border); margin-bottom: 0.75rem; }
+
     /* Study answer */
     .explanation-text { color: #c9d1d9; font-size: 0.9rem; line-height: 1.65; margin-bottom: 0.85rem; }
     .keypoints-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; color: var(--green); font-weight: 700; margin-bottom: 0.4rem; }
@@ -270,15 +276,8 @@
     <!-- Error -->
     <div class="error" id="studyError"></div>
 
-    <!-- Answer card -->
-    <div class="result-card" id="studyAnswerCard">
-      <div class="card-label">📖 Explanation</div>
-      <div class="explanation-text" id="studyAnswerText"></div>
-      <div class="keypoints-label">🔑 Key Points to Remember</div>
-      <div id="studyKeyPoints"></div>
-    </div>
-
-    <button class="try-again" id="studyTryAgain" onclick="resetStudy()">↩ Ask Another Question</button>
+    <!-- Chat history — answers append here, newest on top -->
+    <div id="studyChatHistory"></div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -590,8 +589,10 @@ async function processVoice(mode) {
   const errId = mode === 'study' ? 'studyError' : 'practiceError';
   try {
     const tRes = await fetch('/transcribe', { method: 'POST', body: fd });
-    if (!tRes.ok) throw new Error('Transcription failed');
-    const { transcript } = await tRes.json();
+    if (!tRes.ok) throw new Error('Transcription failed — server error');
+    const tData = await tRes.json();
+    if (!tData.success) throw new Error(tData.detail || 'No speech detected. Please speak clearly and try again.');
+    const transcript = tData.transcript;
 
     if (mode === 'study') {
       document.getElementById('studyQuestion').value = transcript;
