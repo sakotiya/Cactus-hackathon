@@ -208,15 +208,25 @@
     }
     .error.show { display: block; }
 
-    /* ── Study section ────────────────────────────── */
-    .study-section {
+    /* ── Numbered steps ───────────────────────────── */
+    .step-block {
       background: var(--card-bg); border: 1px solid var(--border);
-      border-radius: 1rem; padding: 1rem 1.25rem; margin-bottom: 1.25rem;
+      border-radius: 1rem; padding: 1rem 1.25rem; margin-bottom: 1rem;
     }
-    .study-title {
-      font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 1px; color: var(--muted); margin-bottom: 0.85rem;
-      display: flex; align-items: center; gap: 0.4rem;
+    .step-header {
+      display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.85rem;
+    }
+    .step-num {
+      width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+      background: var(--green); color: white;
+      font-size: 0.75rem; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .step-title {
+      font-size: 0.85rem; font-weight: 700; color: var(--text);
+    }
+    .step-opt {
+      font-size: 0.72rem; font-weight: 400; color: var(--muted);
     }
 
     /* PDF upload row */
@@ -299,11 +309,12 @@
 <!-- ── Main ───────────────────────────────────────────────────────── -->
 <div class="content">
 
-  <!-- Study Material Panel -->
-  <div class="study-section">
-    <div class="study-title">📚 Study Material (optional)</div>
-
-    <!-- PDF upload -->
+  <!-- STEP 1: Study Material -->
+  <div class="step-block">
+    <div class="step-header">
+      <div class="step-num">1</div>
+      <div class="step-title">Upload Study Material <span class="step-opt">(optional)</span></div>
+    </div>
     <div class="pdf-row">
       <button class="pdf-upload-btn" onclick="document.getElementById('pdfInput').click()">
         📄 Upload PDF
@@ -312,9 +323,14 @@
       <span class="pdf-status" id="pdfStatus">No PDF loaded</span>
       <button class="pdf-clear" id="pdfClear" onclick="clearPdf()" title="Remove PDF">✕</button>
     </div>
+  </div>
 
-    <!-- Question input -->
-    <label class="question-label" for="questionInput">Exam question (type or paste):</label>
+  <!-- STEP 2: Question -->
+  <div class="step-block">
+    <div class="step-header">
+      <div class="step-num">2</div>
+      <div class="step-title">Your Exam Question <span class="step-opt">(optional)</span></div>
+    </div>
     <textarea
       id="questionInput"
       class="question-input"
@@ -323,39 +339,42 @@
     ></textarea>
   </div>
 
-  <p class="instruction">
-    Tap <strong>Record</strong>, speak your practice answer,<br>
-    tap again to stop — get instant on-device feedback.
-  </p>
+  <!-- STEP 3: Answer -->
+  <div class="step-block">
+    <div class="step-header">
+      <div class="step-num">3</div>
+      <div class="step-title">Your Answer</div>
+    </div>
+
+    <!-- 3a: Type answer -->
+    <div class="text-answer-wrap">
+      <textarea
+        id="textAnswerInput"
+        class="text-answer-input"
+        rows="4"
+        placeholder="Type your answer here (at least 2–3 sentences)…"
+      ></textarea>
+      <button class="send-btn" id="sendBtn" onclick="submitTextAnswer()">
+        ➤ Send Answer
+      </button>
+    </div>
+
+    <!-- 3b: OR record -->
+    <div class="divider">or speak your answer</div>
+
+    <div class="record-wrap">
+      <button class="record-btn idle" id="recordBtn" onclick="toggleRecording()">
+        <span class="record-icon">🎙️</span>
+        <span class="record-label" id="btnLabel">Record</span>
+      </button>
+      <div class="timer" id="timer"></div>
+    </div>
+  </div>
 
   <!-- Active question banner (shown while recording / processing) -->
   <div class="question-banner" id="questionBanner">
     <div class="question-banner-label">📋 Your Question</div>
     <div id="questionBannerText"></div>
-  </div>
-
-  <!-- Record button -->
-  <div class="record-wrap">
-    <button class="record-btn idle" id="recordBtn" onclick="toggleRecording()">
-      <span class="record-icon">🎙️</span>
-      <span class="record-label" id="btnLabel">Record</span>
-    </button>
-    <div class="timer" id="timer"></div>
-  </div>
-
-  <!-- OR divider + Text answer box -->
-  <div class="divider">or type your answer</div>
-
-  <div class="text-answer-wrap">
-    <textarea
-      id="textAnswerInput"
-      class="text-answer-input"
-      rows="3"
-      placeholder="Type your answer here and click Send…"
-    ></textarea>
-    <button class="send-btn" id="sendBtn" onclick="submitTextAnswer()">
-      ➤ Send Answer
-    </button>
   </div>
 
   <!-- Error message -->
