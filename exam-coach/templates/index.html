@@ -422,8 +422,6 @@ async function askQuestion(questionOverride) {
 
   document.getElementById('askBtn').disabled = true;
   hideErr('studyError');
-  document.getElementById('studyAnswerCard').classList.remove('show');
-  document.getElementById('studyTryAgain').classList.remove('show');
   document.getElementById('studyLoading').classList.add('show');
 
   try {
@@ -434,14 +432,28 @@ async function askQuestion(questionOverride) {
     if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || 'Error');
     const d = await res.json();
 
-    document.getElementById('studyAnswerText').textContent = d.answer;
-    const kpEl = document.getElementById('studyKeyPoints');
-    kpEl.innerHTML = (d.key_points || []).map(p =>
-      `<div class="keypoint"><div class="kp-dot"></div><span>${esc(p)}</span></div>`
-    ).join('');
+    // Append to chat history (newest on top)
+    const history = document.getElementById('studyChatHistory');
+    const keyPointsHtml = (d.key_points || []).length > 0
+      ? `<div class="keypoints-label">🔑 Key Points</div>
+         ${(d.key_points).map(p => `<div class="keypoint"><div class="kp-dot"></div><span>${esc(p)}</span></div>`).join('')}`
+      : '';
 
-    document.getElementById('studyAnswerCard').classList.add('show');
-    document.getElementById('studyTryAgain').classList.add('show');
+    const card = document.createElement('div');
+    card.className = 'chat-item';
+    card.innerHTML = `
+      <div class="chat-q">❓ Your Question</div>
+      <div class="chat-q-text">${esc(q)}</div>
+      <div class="chat-divider"></div>
+      <div class="card-label">📖 From your PDF</div>
+      <div class="explanation-text">${esc(d.answer)}</div>
+      ${keyPointsHtml}
+    `;
+    history.insertBefore(card, history.firstChild);
+
+    // Clear question input for next question
+    document.getElementById('studyQuestion').value = '';
+
   } catch(e) {
     showErr('studyError', e.message);
   } finally {
@@ -452,8 +464,7 @@ async function askQuestion(questionOverride) {
 
 function resetStudy() {
   document.getElementById('studyQuestion').value = '';
-  document.getElementById('studyAnswerCard').classList.remove('show');
-  document.getElementById('studyTryAgain').classList.remove('show');
+  document.getElementById('studyChatHistory').innerHTML = '';
   hideErr('studyError');
 }
 
