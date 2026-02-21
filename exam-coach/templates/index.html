@@ -554,8 +554,10 @@ async function toggleVoice(mode) {
 
 async function startVoice(mode) {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ sampleRate });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    // Read the ACTUAL sample rate the browser decided to use (may differ from requested)
+    sampleRate = audioCtx.sampleRate;
     const src  = audioCtx.createMediaStreamSource(stream);
     scriptProc = audioCtx.createScriptProcessor(4096, 1, 1);
     allSamples = [];
@@ -588,11 +590,22 @@ function stopVoice() {
 
 async function processVoice(mode) {
   const total  = allSamples.reduce((n,a) => n + a.length, 0);
+  const errId  = mode === 'study' ? 'studyError' : 'practiceError';
+
+  // Need at least 1 second of audio (sampleRate samples)
+  if (total < sampleRate) {
+    showErr(errId, 'Recording too short. Hold the mic button and speak for at least 2 seconds.');
+    setMicState(mode, 'idle');
+    return;
+  }
+
   const merged = new Float32Array(total);
   let off = 0;
   for (const c of allSamples) { merged.set(c, off); off += c.length; }
 
-  const wav  = encodeWAV(merged, sampleRate);
+  // Always send 16kHz to Whisper (downsample if browser recorded at higher rate)
+  const pcm16 = downsampleTo16k(merged, sampleRate);
+  const wav   = encodeWAV(pcm16, 16000);
   const blob = new Blob([wav], { type: 'audio/wav' });
   const fd   = new FormData();
   fd.append('audio', blob, 'rec.wav');
@@ -645,6 +658,23 @@ function setMicState(mode, state) {
   if (state === 'idle')       { btn.textContent = '🎙️'; label.textContent = mode === 'study' ? 'Tap mic and ask your question' : 'Tap mic and speak your answer'; }
   if (state === 'recording')  { btn.textContent = '⏹';  label.textContent = 'Recording… tap to stop'; }
   if (state === 'processing') { btn.textContent = '⏳'; label.textContent = 'Transcribing…'; }
+}
+
+// ── Downsample to 16kHz (Whisper requirement) ─────────────────────────
+function downsampleTo16k(samples, fromRate) {
+  if (fromRate === 16000) return samples;
+  const ratio   = fromRate / 16000;
+  const outLen  = Math.round(samples.length / ratio);
+  const out     = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    // Simple linear interpolation
+    const pos  = i * ratio;
+    const lo   = Math.floor(pos);
+    const hi   = Math.min(lo + 1, samples.length - 1);
+    const frac = pos - lo;
+    out[i] = samples[lo] * (1 - frac) + samples[hi] * frac;
+  }
+  return out;
 }
 
 // ── WAV encoder ───────────────────────────────────────────────────────

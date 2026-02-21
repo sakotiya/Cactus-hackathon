@@ -214,9 +214,12 @@ async def transcribe(audio: UploadFile = File(...)):
     if "mp4" in ct:   suffix = ".mp4"
     elif "webm" in ct: suffix = ".webm"
 
+    audio_bytes = await audio.read()
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await audio.read())
+        tmp.write(audio_bytes)
         tmp_path = tmp.name
+
+    print(f"[STT] Received audio: {len(audio_bytes)} bytes, suffix={suffix}")
 
     try:
         transcript = stt.transcribe(tmp_path)
