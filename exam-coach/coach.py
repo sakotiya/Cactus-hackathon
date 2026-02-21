@@ -58,12 +58,12 @@ SYSTEM_PROMPT = (
     "and 2-3 short improvement suggestions."
 )
 
-SYSTEM_PROMPT_WITH_CONTEXT = (
-    "You are an exam coach with access to the student's study material. "
-    "Evaluate the student's spoken answer against the exam question and study content. "
-    "Call give_feedback with a score (1-10) and 2-3 specific improvement suggestions "
-    "based on what is covered in the study material."
-)
+# Fallback suggestions when the model gives nonsense output
+_DEFAULT_SUGGESTIONS = [
+    "Structure your answer with a clear introduction, body, and conclusion.",
+    "Use specific examples or evidence to support your points.",
+    "Be more concise — aim for clarity over length.",
+]
 
 
 class ExamCoach:
@@ -90,35 +90,51 @@ class ExamCoach:
                 "raw":     <raw model output for debugging>
             }
         """
-        if not transcript.strip():
+        transcript = transcript.strip()
+        if not transcript:
             return {
                 "score": "N/A",
-                "bullets": ["No speech detected. Please try recording again."],
+                "bullets": ["No answer detected. Please try recording or typing again."],
                 "raw": "",
             }
 
-        # Build prompt — richer when question/PDF context is available
-        parts = []
-        if pdf_context:
-            parts.append(f"Study material excerpt:\n{pdf_context}")
-        if question:
-            parts.append(f"Exam question:\n{question}")
-        parts.append(f"Student's spoken answer:\n\"{transcript}\"")
-        parts.append(
-            "Score this answer 1-10 on clarity, structure, and completeness"
-            + (" relative to the study material and question above" if pdf_context or question else "")
-            + ". Give 2-3 specific improvement suggestions."
-        )
-        prompt = "\n\n".join(parts)
+        # Detect if the "answer" is just a question / too short to evaluate
+        word_count = len(transcript.split())
+        if word_count < 5:
+            score_val = max(1, min(3, word_count))
+            return {
+                "score": f"{score_val}/10",
+                "bullets": [
+                    "Your answer is too short — aim for at least 2-3 full sentences.",
+                    "Explain your reasoning, not just the conclusion.",
+                    "Add examples or definitions to support your answer.",
+                ],
+                "raw": "",
+            }
 
-        system = SYSTEM_PROMPT_WITH_CONTEXT if (pdf_context or question) else SYSTEM_PROMPT
+        # Keep the prompt SHORT so the small 270M model doesn't get confused.
+        # PDF context is compressed to a brief hint (≤200 chars) rather than
+        # full paragraphs — FunctionGemma degrades badly with long context.
+        context_hint = ""
+        if pdf_context:
+            # Take just the first 200 chars as a topic hint
+            hint = pdf_context[:200].replace("\n", " ").strip()
+            context_hint = f" The topic covers: {hint}..."
+        if question:
+            context_hint += f" The question asked: {question}"
+
+        prompt = (
+            f"Student answer: \"{transcript}\""
+            f"{context_hint}\n\n"
+            "Call give_feedback with score (1-10) and 2-3 improvement tips."
+        )
 
         model = cactus_init(self.model_path)
         try:
             raw_str = cactus_complete(
                 model,
                 [
-                    {"role": "system", "content": system},
+                    {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": prompt},
                 ],
                 tools=[{"type": "function", "function": FEEDBACK_TOOL}],
@@ -129,42 +145,74 @@ class ExamCoach:
         finally:
             cactus_destroy(model)
 
-        return self._parse(raw_str)
+        return self._parse(raw_str, transcript, question)
 
-    def _parse(self, raw_str: str) -> dict:
+    def _parse(self, raw_str: str, transcript: str = "", question: str = "") -> dict:
         """Parse Cactus function-call output into a clean feedback dict."""
         try:
             raw = json.loads(raw_str)
         except json.JSONDecodeError:
-            return self._fallback(raw_str)
+            return self._fallback(raw_str, transcript, question)
 
         calls = raw.get("function_calls", [])
         if calls:
             args = calls[0].get("arguments", {})
             score_val = args.get("score", "?")
+
+            # Validate score is a real number
+            try:
+                score_int = int(score_val)
+                if not (1 <= score_int <= 10):
+                    raise ValueError
+            except (ValueError, TypeError):
+                score_int = None
+
             bullets = [
                 args[k]
                 for k in ("suggestion_1", "suggestion_2", "suggestion_3")
                 if args.get(k)
             ]
-            return {
-                "score":   f"{score_val}/10",
-                "bullets": bullets or ["Keep practising!"],
-                "raw":     raw_str,
-            }
+
+            # Sanitize: discard bullets that just echo the transcript or question
+            bullets = self._sanitize_bullets(bullets, transcript, question)
+
+            if score_int and bullets:
+                return {
+                    "score":   f"{score_int}/10",
+                    "bullets": bullets,
+                    "raw":     raw_str,
+                }
 
         # Fallback: try to parse free-form response text
-        return self._fallback(raw.get("response") or raw_str)
+        return self._fallback(raw.get("response") or raw_str, transcript, question)
 
-    def _fallback(self, text: str) -> dict:
+    def _sanitize_bullets(self, bullets: list, transcript: str, question: str) -> list:
+        """Remove suggestions that just repeat the user's input."""
+        clean = []
+        bad_refs = {transcript.lower().strip(), question.lower().strip()} - {""}
+        for b in bullets:
+            b_stripped = b.strip()
+            b_lower = b_stripped.lower().rstrip("?.")
+            # Skip if bullet is essentially the same as the transcript/question
+            if any(b_lower in ref or ref in b_lower for ref in bad_refs):
+                continue
+            # Skip very short or empty bullets
+            if len(b_stripped) < 10:
+                continue
+            clean.append(b_stripped)
+        return clean or _DEFAULT_SUGGESTIONS
+
+    def _fallback(self, text: str, transcript: str = "", question: str = "") -> dict:
         """Extract score and bullets from free-form text if structured parse fails."""
         score = "?"
         m = re.search(r"(\d+)\s*/\s*10", str(text))
         if m:
-            score = f"{m.group(1)}/10"
+            val = int(m.group(1))
+            if 1 <= val <= 10:
+                score = f"{val}/10"
+
         bullets = re.findall(r"[-•*]\s+(.+)", str(text))[:3]
-        if not bullets:
-            bullets = ["Try to be more structured.", "Add specific examples.", "Be more concise."]
+        bullets = self._sanitize_bullets(bullets, transcript, question)
         return {"score": score, "bullets": bullets, "raw": str(text)}
 
 
