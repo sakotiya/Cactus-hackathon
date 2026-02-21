@@ -1,0 +1,46 @@
+Gourav LLM Hybrid - How It Works
+
+LOCATION: /Users/gourav.dhama/Desktop/metaflow/ai agent hybrid/
+
+STRATEGY:
+---------
+1. Every query tries LOCAL Gemma first (fast, free)
+2. If local response is insufficient → Cloud Gemini (powerful, accurate)
+3. If query needs live data (scores, news) → Cloud Gemini directly
+
+INDICATORS:
+-----------
+🔷 [Local Gemma] - Answered offline
+🟡 [Cloud Gemini + Search] - Used online with search
+💭 Local insufficient, using cloud - Automatic fallback
+
+AUTO FILE PROCESSING:
+---------------------
+The file you added: mab_smart_agent_Conflict_Resolution_row0.json
+Location: memory/ folder
+Status: Will be auto-processed when agent starts
+
+This file contains conflict resolution facts that will be:
+- Extracted by Gemma
+- Categorized automatically  
+- Stored in long-term memory
+- Available for queries
+
+RUN:
+----
+cd "/Users/gourav.dhama/Desktop/metaflow/ai agent hybrid"
+python main.py
+
+The agent will:
+1. Start file watcher
+2. Scan memory/ folder
+3. Process your JSON file
+4. Load all facts into memory
+5. Ready to answer using those facts
+
+STATS:
+------
+Use /stats to see:
+- How many local vs cloud responses
+- Memory by category
+- Total facts loaded
